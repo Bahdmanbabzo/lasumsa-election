@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { getElections } from '../../services/api';
+import { supabase } from '../../supabaseClient';
 import AdminLayout from '../../components/AdminLayout';
 import { Plus, Vote, Users, BarChart3, Clock, CheckCircle, XCircle, FileEdit, Eye, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -22,9 +22,37 @@ export default function Dashboard() {
 
   const loadElections = async () => {
     try {
-      const { data } = await getElections();
-      setElections(data);
+      // Fetch elections
+      const { data: electionsData, error } = await supabase
+        .from('elections')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      // For each election, get voter count and vote count
+      // Note: In a real large-scale app, this should be a view or RPC
+      const electionsWithStats = await Promise.all(electionsData.map(async (election) => {
+        const { count: voterCount } = await supabase
+          .from('voters')
+          .select('*', { count: 'exact', head: true })
+          .eq('election_id', election.id);
+          
+        const { count: voteCount } = await supabase
+          .from('votes')
+          .select('*', { count: 'exact', head: true })
+          .eq('election_id', election.id);
+
+        return {
+          ...election,
+          total_voters: voterCount,
+          votes_cast: voteCount
+        };
+      }));
+
+      setElections(electionsWithStats);
     } catch (err) {
+      console.error(err);
       toast.error('Failed to load elections');
     } finally {
       setLoading(false);

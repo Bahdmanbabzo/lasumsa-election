@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getElectionResults, getElectionStats } from '../../services/api';
-import { useWebSocket } from '../../context/WebSocketContext';
+import { supabase } from '../../supabaseClient';
 import AdminLayout from '../../components/AdminLayout';
 import { ArrowLeft, Users, Vote, TrendingUp, Clock, RefreshCw, Wifi, WifiOff, Trophy, BarChart3 } from 'lucide-react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title } from 'chart.js';
@@ -21,18 +20,64 @@ export default function LiveResults() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState(new Date());
-  const { subscribe, isConnected } = useWebSocket();
+  const [isConnected, setIsConnected] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
-      const [resultsRes, statsRes] = await Promise.all([
-        getElectionResults(id),
-        getElectionStats(id)
-      ]);
-      setResults(resultsRes.data);
-      setStats(statsRes.data);
+      // 1. Get Election Details
+      const { data: election } = await supabase.from('elections').select('*').eq('id', id).single();
+      
+      // 2. Get Stats (Voters & Votes)
+      const { count: totalVoters } = await supabase.from('voters').select('*', { count: 'exact', head: true }).eq('election_id', id);
+      const { count: votesCast } = await supabase.from('votes').select('*', { count: 'exact', head: true }).eq('election_id', id);
+
+      // 3. Get Positions & Candidates
+      const { data: positions } = await supabase.from('positions').select('*, candidates(*)').eq('election_id', id);
+
+      // 4. Calculate Results
+      const { data: allVotes } = await supabase.from('votes').select('position_id, candidate_id').eq('election_id', id);
+      
+      const voteCounts = {};
+      allVotes.forEach(vote => {
+          if (!voteCounts[vote.candidate_id]) voteCounts[vote.candidate_id] = 0;
+          voteCounts[vote.candidate_id]++;
+      });
+
+      const formattedPositions = positions.map(pos => {
+        const candidates = pos.candidates.map(cand => ({
+            ...cand,
+            vote_count: voteCounts[cand.id] || 0
+        }));
+        
+        const total_votes = candidates.reduce((sum, c) => sum + c.vote_count, 0);
+        
+        // Add percentage
+        candidates.forEach(c => {
+            c.percentage = total_votes > 0 ? ((c.vote_count / total_votes) * 100).toFixed(1) : 0;
+        });
+        
+        // Sort by votes
+        candidates.sort((a,b) => b.vote_count - a.vote_count);
+
+        return {
+           ...pos,
+           candidates,
+           total_votes
+        };
+      });
+
+      setStats({
+        election,
+        total_voters: totalVoters,
+        votes_cast: votesCast,
+        turnout_percentage: totalVoters ? ((votesCast / totalVoters) * 100).toFixed(1) : 0,
+        department_breakdown: [] // Placeholder
+      });
+
+      setResults({ positions: formattedPositions });
       setLastUpdate(new Date());
     } catch (err) {
+      console.error(err);
       toast.error('Failed to load results');
     } finally {
       setLoading(false);
@@ -41,23 +86,22 @@ export default function LiveResults() {
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
-
-  // Subscribe to real-time updates
-  useEffect(() => {
-    const unsubscribe = subscribe((message) => {
-      if (message.type === 'VOTE_CAST' && message.payload.election_id === id) {
+    
+    // Realtime Subscription
+    const subscription = supabase
+      .channel('public:votes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'votes', filter: `election_id=eq.${id}` }, (payload) => {
+        // Optimistic update or reload? Reload is safer for consistency
         loadData();
-      }
-    });
-    return unsubscribe;
-  }, [subscribe, id, loadData]);
+      })
+      .subscribe((status) => {
+        setIsConnected(status === 'SUBSCRIBED');
+      });
 
-  // Auto-refresh every 30 seconds as fallback
-  useEffect(() => {
-    const interval = setInterval(loadData, 30000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, [loadData, id]);
 
   if (loading) {
     return (

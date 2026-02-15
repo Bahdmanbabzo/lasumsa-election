@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createElection } from '../../services/api';
+import { supabase } from '../../supabaseClient';
 import AdminLayout from '../../components/AdminLayout';
 import { Calendar, FileText, Type } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -19,16 +19,25 @@ export default function ElectionManager() {
     setLoading(true);
 
     try {
-      const { data } = await createElection({
-        title,
-        description,
-        start_date: startDate ? new Date(startDate).toISOString() : null,
-        end_date: endDate ? new Date(endDate).toISOString() : null
-      });
-      toast.success('Election created!');
+      const { data, error } = await supabase
+        .from('elections')
+        .insert([{
+          title,
+          description,
+          start_date: startDate ? new Date(startDate).toISOString() : null,
+          end_date: endDate ? new Date(endDate).toISOString() : null,
+          status: 'draft'
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      
+      toast.success('Election created successfully!');
       navigate(`/admin/elections/${data.id}`);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to create election');
+      console.error(err);
+      toast.error(err.message || 'Failed to create election');
     } finally {
       setLoading(false);
     }

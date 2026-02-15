@@ -16,6 +16,7 @@ import VoterManager from './pages/admin/VoterManager'
 import LiveResults from './pages/admin/LiveResults'
 import VotingBooth from './pages/voter/VotingBooth'
 import VoteSuccess from './pages/voter/VoteSuccess'
+import VoterSignup from './pages/VoterSignup'
 
 function App() {
   return (
@@ -33,6 +34,7 @@ function App() {
             <Route path="/" element={<LandingPage />} />
             <Route path="/admin/login" element={<AdminLogin />} />
             <Route path="/admin/register" element={<AdminRegister />} />
+            <Route path="/vote/signup" element={<VoterSignup />} />
             <Route path="/vote" element={<VoterLogin />} />
             <Route path="/vote/success" element={<VoteSuccess />} />
 

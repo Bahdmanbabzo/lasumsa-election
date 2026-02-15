@@ -1,13 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { voterLogin } from '../services/api';
-import { Vote, Hash, KeyRound, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, Vote, ArrowRight, ShieldCheck, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function VoterLogin() {
-  const [matricNumber, setMatricNumber] = useState('');
-  const [votingCode, setVotingCode] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -17,15 +16,14 @@ export default function VoterLogin() {
     setLoading(true);
 
     try {
-      const { data } = await voterLogin({
-        matric_number: matricNumber.toUpperCase().trim(),
-        voting_code: votingCode.trim()
-      });
-      login(data.token, data.voter);
-      toast.success(`Welcome, ${data.voter.name}!`);
-      navigate('/vote/booth');
+      await login(email, password);
+      // AuthContext will update user state automatically
+      // We can also double check profile here if needed, but context handles it.
+      toast.success(`Welcome back!`);
+      navigate('/vote/booth'); // Or dashboard if you have one
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Login failed. Please check your credentials.');
+      console.error(err);
+      toast.error(err.message || 'Login failed. Please check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -42,43 +40,43 @@ export default function VoterLogin() {
             <span className="text-xl font-bold">LASUMSA Elections</span>
           </Link>
           <h1 className="text-2xl font-bold text-white mt-4">Voter Login</h1>
-          <p className="text-green-300 mt-2">Enter your credentials to cast your vote</p>
+          <p className="text-green-300 mt-2">Enter your credentials to access your account</p>
         </div>
 
-        <div className="card p-8">
-          <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-            <ShieldCheck className="w-6 h-6 text-green-600 flex-shrink-0" />
-            <p className="text-sm text-green-800">
-              Your vote is secure and anonymous. You can only vote once using your unique credentials.
+        <div className="bg-white/10 backdrop-blur-md rounded-xl p-8 shadow-2xl border border-white/10">
+          <div className="flex items-center gap-3 bg-green-500/20 border border-green-500/30 rounded-lg p-4 mb-6">
+            <ShieldCheck className="w-6 h-6 text-green-400 flex-shrink-0" />
+            <p className="text-sm text-green-100">
+              Your vote is secure and anonymous.
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="label">Matric Number</label>
+              <label className="block text-sm font-medium text-green-100 mb-1">Email Address</label>
               <div className="relative">
-                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-green-400" />
                 <input
-                  type="text"
-                  value={matricNumber}
-                  onChange={(e) => setMatricNumber(e.target.value.toUpperCase())}
-                  className="input-field !pl-11 uppercase"
-                  placeholder="MAT/2024/001"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-11 pr-4 py-3 text-white placeholder-green-200/50 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all"
+                  placeholder="student@lasu.edu.ng"
                   required
                 />
               </div>
             </div>
 
             <div>
-              <label className="label">Voting Code</label>
+              <label className="block text-sm font-medium text-green-100 mb-1">Password</label>
               <div className="relative">
-                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-green-400" />
                 <input
-                  type="text"
-                  value={votingCode}
-                  onChange={(e) => setVotingCode(e.target.value.toUpperCase())}
-                  className="input-field !pl-11 uppercase tracking-wider"
-                  placeholder="VOTE-XXX-XXX"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg pl-11 pr-4 py-3 text-white placeholder-green-200/50 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all"
+                  placeholder="••••••••"
                   required
                 />
               </div>
@@ -86,22 +84,28 @@ export default function VoterLogin() {
 
             <button
               type="submit"
-              className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center gap-2"
+              className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 shadow-lg shadow-green-900/50 flex items-center justify-center gap-2 mt-2"
               disabled={loading}
             >
               {loading ? (
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
               ) : (
                 <>
-                  Proceed to Vote <ArrowRight className="w-4 h-4" />
+                  Login <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
           </form>
+          
+          <div className="mt-6 pt-6 border-t border-white/10">
+            <Link to="/vote/signup" className="flex items-center justify-center gap-2 w-full py-3 px-4 rounded-lg border border-green-500/50 text-green-300 hover:bg-green-500/10 transition-colors text-sm font-medium">
+              <UserPlus className="w-4 h-4" /> Don't have an account? Register
+            </Link>
+          </div>
         </div>
 
         <div className="text-center mt-6">
-          <Link to="/admin/login" className="text-green-300 hover:text-white text-sm font-medium transition">
+          <Link to="/admin/login" className="text-green-400 hover:text-green-300 text-sm font-medium transition underline-offset-4 hover:underline">
             Admin Login →
           </Link>
         </div>

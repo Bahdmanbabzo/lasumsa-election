@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { getElectionBallot, castVote } from '../../services/api';
-import { Vote, User, ChevronRight, ChevronLeft, CheckCircle2, AlertCircle, LogOut, Shield } from 'lucide-react';
+import { supabase } from '../../supabaseClient';
+import { Vote, User, ChevronRight, ChevronLeft, CheckCircle2, AlertCircle, LogOut, Shield, KeyRound } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function VotingBooth() {
@@ -14,19 +14,87 @@ export default function VotingBooth() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  
+  // Voting Code Verification State
+  const [isVerified, setIsVerified] = useState(false);
+  const [votingCodeInput, setVotingCodeInput] = useState('');
+  const [verificationError, setVerificationError] = useState('');
 
   useEffect(() => {
     loadBallot();
-  }, []);
+  }, [user]);
 
   const loadBallot = async () => {
     try {
-      const { data } = await getElectionBallot(user.election_id);
-      setBallot(data);
+      if(!user) return;
+
+      // 1. Get Active Election
+      const { data: election, error: electionError } = await supabase
+        .from('elections')
+        .select('*')
+        .eq('status', 'active')
+        .single();
+      
+      if (electionError || !election) throw new Error('No active election found');
+
+      // 2. Check if user is registered for this election
+      const { data: voter, error: voterError } = await supabase
+        .from('voters')
+        .select('*')
+        .eq('election_id', election.id)
+        .eq('user_id', user.id) // This assumes logged-in user link
+        .single();
+        
+      if (voterError && voterError.code === 'PGRST116') {
+         // User not registered for this specific election
+         toast.error('You are not registered for this election.');
+         setLoading(false);
+         return;
+      }
+      
+      if (voter.has_voted) {
+        navigate('/vote/success');
+        return;
+      }
+
+      // 3. Get Positions and Candidates
+      const { data: positions, error: positionsError } = await supabase
+        .from('positions')
+        .select(`
+          *,
+          candidates (*)
+        `)
+        .eq('election_id', election.id)
+        .order('display_order', { ascending: true });
+
+      if (positionsError) throw positionsError;
+
+      // Sort candidates
+      positions.forEach(p => {
+          p.candidates?.sort((a,b) => (a.display_order || 0) - (b.display_order || 0));
+      });
+
+      // Include the real voting code for verification
+      setBallot({ ...election, positions, voterId: voter.id, realVotingCode: voter.voting_code });
     } catch (err) {
+      console.error(err);
       toast.error('Failed to load ballot');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = (e) => {
+    e.preventDefault();
+    if (!ballot) return;
+    
+    // Compare input with the voting code from the database
+    if (votingCodeInput.trim().toUpperCase() === ballot.realVotingCode) {
+      setIsVerified(true);
+      toast.success('Identity verified! You may now vote.');
+    } else {
+      setVerificationError('Invalid voting code. Please check your email.');
+      toast.error('Invalid voting code');
     }
   };
 
@@ -36,6 +104,7 @@ export default function VotingBooth() {
 
   const handleNext = () => {
     const pos = ballot.positions[currentPosition];
+    // Allow skipping if desired? Usually no.
     if (!selections[pos.id]) {
       return toast.error('Please select a candidate before proceeding');
     }
@@ -49,31 +118,51 @@ export default function VotingBooth() {
   const handlePrev = () => {
     if (currentPosition > 0) {
       setCurrentPosition(prev => prev - 1);
+    } else {
+       setShowConfirm(false); // Go back from confirm screen
     }
   };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      const votes = Object.entries(selections).map(([position_id, candidate_id]) => ({
+      const votesToInsert = Object.entries(selections).map(([position_id, candidate_id]) => ({
+        election_id: ballot.id,
+        voter_id: ballot.voterId,
         position_id,
-        candidate_id
+        candidate_id,
+        cast_at: new Date().toISOString()
       }));
 
-      await castVote({ votes });
+      // 1. Insert Votes
+      const { error: voteError } = await supabase
+        .from('votes')
+        .insert(votesToInsert);
+
+      if (voteError) throw voteError;
+
+      // 2. Mark Voter as Voted
+      const { error: voterError } = await supabase
+        .from('voters')
+        .update({ has_voted: true, voted_at: new Date().toISOString() })
+        .eq('id', ballot.voterId);
+
+      if (voterError) throw voterError;
+
       toast.success('Your vote has been cast successfully!');
-      logout();
+      // Optional: logout(); 
       navigate('/vote/success');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to cast vote');
+      console.error(err);
+      toast.error(err.message || 'Failed to cast vote');
       setShowConfirm(false);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/vote');
   };
 
@@ -91,11 +180,72 @@ export default function VotingBooth() {
   if (!ballot || !ballot.positions?.length) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="card p-8 text-center max-w-md">
+        <div className="bg-white p-8 text-center max-w-md rounded-xl shadow-lg border border-gray-100">
           <AlertCircle className="w-16 h-16 text-orange-500 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-gray-900 mb-2">No Ballot Available</h2>
-          <p className="text-gray-500 mb-6">The ballot for this election is not yet ready.</p>
-          <button onClick={handleLogout} className="btn-secondary">Go Back</button>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">No Active Ballot</h2>
+          <p className="text-gray-500 mb-6">You may not be registered for the active election, or there is no election currently running.</p>
+          <button onClick={handleLogout} className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-800 font-medium transition-colors">Go Back</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Voting Code Verification Screen
+  if (!isVerified) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden">
+          <div className="bg-green-600 p-6 text-center">
+            <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
+              <KeyRound className="w-8 h-8 text-white" />
+            </div>
+            <h2 className="text-2xl font-bold text-white">Enter Voting Code</h2>
+            <p className="text-green-100 text-sm mt-2">
+              For security, please enter the unique 6-character code sent to your email.
+            </p>
+          </div>
+
+          <div className="p-8">
+            <form onSubmit={handleVerifyCode} className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Voting Code</label>
+                <input
+                  type="text"
+                  value={votingCodeInput}
+                  onChange={(e) => {
+                    setVotingCodeInput(e.target.value.toUpperCase());
+                    setVerificationError('');
+                  }}
+                  className={`w-full px-4 py-3 text-center text-2xl tracking-[0.5em] font-mono border rounded-lg focus:ring-2 focus:outline-none transition-all uppercase placeholder:tracking-normal ${
+                    verificationError 
+                      ? 'border-red-300 focus:ring-red-200 bg-red-50 text-red-900' 
+                      : 'border-slate-300 focus:ring-green-500/50 focus:border-green-500'
+                  }`}
+                  placeholder="------"
+                  maxLength={6}
+                />
+                {verificationError && (
+                  <p className="mt-2 text-sm text-red-600 flex items-center gap-1">
+                    <AlertCircle className="w-4 h-4" /> {verificationError}
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={votingCodeInput.length < 6}
+                className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition-colors shadow-lg shadow-green-600/20 flex items-center justify-center gap-2"
+              >
+                Verify & Start Voting <ChevronRight className="w-4 h-4" />
+              </button>
+            </form>
+            
+            <div className="mt-6 text-center">
+              <button onClick={handleLogout} className="text-slate-400 hover:text-slate-600 text-sm font-medium">
+                Cancel & Logout
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -103,14 +253,15 @@ export default function VotingBooth() {
 
   const position = ballot.positions[currentPosition];
   const progress = ((currentPosition + 1) / ballot.positions.length) * 100;
-  const allSelected = ballot.positions.every(p => selections[p.id]);
+  // Use state selections to determine if current step is satisfied for UI
+  // Note: allSelected variable in original code checked EVERYTHING, but we step through one by one.
 
   // Confirmation screen
   if (showConfirm) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-950 via-green-900 to-emerald-800 flex items-center justify-center p-4">
         <div className="w-full max-w-lg">
-          <div className="card p-8">
+          <div className="bg-white rounded-xl shadow-2xl p-8">
             <div className="text-center mb-6">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Shield className="w-8 h-8 text-green-600" />
@@ -119,14 +270,14 @@ export default function VotingBooth() {
               <p className="text-gray-500 mt-2">Please review your selections below. This action cannot be undone.</p>
             </div>
 
-            <div className="space-y-3 mb-8">
+            <div className="space-y-3 mb-8 max-h-[60vh] overflow-y-auto pr-2">
               {ballot.positions.map((pos) => {
                 const selected = pos.candidates.find(c => c.id === selections[pos.id]);
                 return (
-                  <div key={pos.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div key={pos.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-100">
                     <div>
-                      <p className="text-xs text-gray-500 font-medium">{pos.title}</p>
-                      <p className="text-sm font-semibold text-gray-900">{selected?.name}</p>
+                      <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">{pos.title}</p>
+                      <p className="text-sm font-bold text-gray-900 mt-1">{selected?.name}</p>
                     </div>
                     <CheckCircle2 className="w-5 h-5 text-green-500" />
                   </div>
@@ -150,7 +301,7 @@ export default function VotingBooth() {
               </button>
               <button
                 onClick={() => setShowConfirm(false)}
-                className="btn-secondary"
+                className="px-6 py-3 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
                 disabled={submitting}
               >
                 Go Back
@@ -163,20 +314,20 @@ export default function VotingBooth() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 font-sans">
       {/* Header */}
-      <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <nav className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center">
-              <Vote className="w-5 h-5 text-white" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-600/20">
+              <Vote className="w-6 h-6 text-white" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-gray-900">{ballot.title}</p>
-              <p className="text-xs text-gray-500">Welcome, {user?.name}</p>
+              <p className="text-sm font-bold text-gray-900">{ballot.title}</p>
+              <p className="text-xs text-green-600 font-medium">Voter: {user?.full_name || 'Student'}</p>
             </div>
           </div>
-          <button onClick={handleLogout} className="text-gray-400 hover:text-red-500 flex items-center gap-1 text-sm">
+          <button onClick={handleLogout} className="text-gray-400 hover:text-red-500 flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg hover:bg-red-50 transition-colors">
             <LogOut className="w-4 h-4" /> Exit
           </button>
         </div>
