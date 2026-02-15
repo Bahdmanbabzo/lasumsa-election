@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { adminRegister } from '../services/api';
+import { supabase } from '../supabaseClient';
 import { Vote, Mail, Lock, User, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -20,12 +20,32 @@ export default function AdminRegister() {
     }
     setLoading(true);
     try {
-      const { data } = await adminRegister({ name, email, password });
-      login(data.token, data.user);
-      toast.success('Account created successfully!');
-      navigate('/admin/dashboard');
+      // Register with Supabase
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+            role: 'admin' // Create as Admin
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      if (data.session) {
+          // If auto-confirm is on (local dev usually), we get a session immediately
+          toast.success('Account created successfully!');
+          navigate('/admin/dashboard');
+      } else {
+          // If email confirmation is required
+          toast.success('Registration successful! Please check your email to verify your account.');
+          navigate('/admin/login');
+      }
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Registration failed');
+      console.error(err);
+      toast.error(err.message || 'Registration failed');
     } finally {
       setLoading(false);
     }

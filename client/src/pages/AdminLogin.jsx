@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { adminLogin } from '../services/api';
+import { supabase } from '../supabaseClient';
 import { Vote, Mail, Lock, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -17,12 +17,12 @@ export default function AdminLogin() {
     setLoading(true);
 
     try {
-      const { data } = await adminLogin({ email, password });
-      login(data.token, data.user);
-      toast.success('Welcome back!');
+      await login(email, password); // Uses Supabase login from AuthContext
       navigate('/admin/dashboard');
+      toast.success('Welcome back!');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Login failed');
+      console.error(err);
+      toast.error(err.message || 'Login failed');
     } finally {
       setLoading(false);
     }
