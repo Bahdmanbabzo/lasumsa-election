@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getVoters, addVoter, bulkAddVoters, deleteVoter, regenerateCode } from '../../services/api';
+import { supabase } from '../../supabaseClient';
 import AdminLayout from '../../components/AdminLayout';
 import { Plus, Trash2, RefreshCw, Search, Upload, ArrowLeft, CheckCircle, XCircle, Copy, X } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -21,9 +21,16 @@ export default function VoterManager() {
 
   const loadVoters = async () => {
     try {
-      const { data } = await getVoters(electionId);
-      setVoters(data);
+      const { data, error } = await supabase
+        .from('voters')
+        .select('*')
+        .eq('election_id', electionId)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setVoters(data || []);
     } catch (err) {
+      console.error(err);
       toast.error('Failed to load voters');
     } finally {
       setLoading(false);
@@ -33,13 +40,30 @@ export default function VoterManager() {
   const handleAddVoter = async (e) => {
     e.preventDefault();
     try {
-      await addVoter({ election_id: electionId, ...formData });
+      const { error } = await supabase
+        .from('voters')
+        .insert([{
+          election_id: electionId,
+          matric_number: formData.matric_number.toUpperCase().trim(),
+          name: formData.name,
+          email: formData.email || null,
+          department: formData.department || null
+        }]);
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error('A voter with this matric number already exists in this election.');
+        }
+        throw error;
+      }
+
       toast.success('Voter added!');
       setShowAddModal(false);
       setFormData({ matric_number: '', name: '', email: '', department: '' });
       loadVoters();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to add voter');
+      console.error(err);
+      toast.error(err.message || 'Failed to add voter');
     }
   };
 
@@ -49,10 +73,11 @@ export default function VoterManager() {
       const voterList = lines.map(line => {
         const parts = line.split(',').map(s => s.trim());
         return {
-          matric_number: parts[0] || '',
+          election_id: electionId,
+          matric_number: (parts[0] || '').toUpperCase().trim(),
           name: parts[1] || '',
-          email: parts[2] || '',
-          department: parts[3] || ''
+          email: parts[2] || null,
+          department: parts[3] || null
         };
       }).filter(v => v.matric_number && v.name);
 
@@ -60,12 +85,19 @@ export default function VoterManager() {
         return toast.error('No valid voter data found');
       }
 
-      const { data } = await bulkAddVoters({ election_id: electionId, voters: voterList });
-      toast.success(`${data.added} voters added!`);
+      const { data, error } = await supabase
+        .from('voters')
+        .upsert(voterList, { onConflict: 'election_id,matric_number', ignoreDuplicates: true })
+        .select();
+
+      if (error) throw error;
+
+      toast.success(`${data?.length || 0} voters added!`);
       setShowBulkModal(false);
       setBulkText('');
       loadVoters();
     } catch (err) {
+      console.error(err);
       toast.error('Failed to bulk add voters');
     }
   };
@@ -73,21 +105,31 @@ export default function VoterManager() {
   const handleDelete = async (voterId) => {
     if (!confirm('Delete this voter?')) return;
     try {
-      await deleteVoter(voterId);
+      const { error } = await supabase.from('voters').delete().eq('id', voterId);
+      if (error) throw error;
       toast.success('Voter deleted');
       loadVoters();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to delete voter');
+      console.error(err);
+      toast.error(err.message || 'Failed to delete voter');
     }
   };
 
   const handleRegenCode = async (voterId) => {
     try {
-      const { data } = await regenerateCode(voterId);
+      // Generate a new random 6-char code
+      const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const { error } = await supabase
+        .from('voters')
+        .update({ voting_code: newCode })
+        .eq('id', voterId);
+
+      if (error) throw error;
       toast.success('New voting code generated');
       loadVoters();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to regenerate code');
+      console.error(err);
+      toast.error(err.message || 'Failed to regenerate code');
     }
   };
 

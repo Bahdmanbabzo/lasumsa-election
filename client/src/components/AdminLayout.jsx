@@ -54,10 +54,10 @@ export default function AdminLayout({ children, title }) {
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
                   <span className="text-primary-700 font-semibold text-sm">
-                    {user?.name?.charAt(0)?.toUpperCase() || 'A'}
+                    {(user?.full_name || user?.email || 'A')?.charAt(0)?.toUpperCase()}
                   </span>
                 </div>
-                <span className="text-sm font-medium text-gray-700 hidden sm:block">{user?.name}</span>
+                <span className="text-sm font-medium text-gray-700 hidden sm:block">{user?.full_name || user?.email}</span>
               </div>
               <button onClick={handleLogout} className="p-2 text-gray-400 hover:text-red-500 transition">
                 <LogOut className="w-5 h-5" />

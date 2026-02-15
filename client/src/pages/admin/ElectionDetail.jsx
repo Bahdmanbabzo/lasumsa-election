@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getElection, updateElection, deleteElection, addPosition, deletePosition, addCandidate, deleteCandidate } from '../../services/api';
+import { supabase } from '../../supabaseClient';
 import AdminLayout from '../../components/AdminLayout';
 import { Plus, Trash2, Users, BarChart3, Play, Square, CheckCircle, AlertTriangle, User, Briefcase, X } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -23,9 +23,41 @@ export default function ElectionDetail() {
 
   const loadElection = async () => {
     try {
-      const { data } = await getElection(id);
-      setElection(data);
+      // Fetch election
+      const { data: electionData, error } = await supabase
+        .from('elections')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
+
+      // Fetch positions with candidates
+      const { data: positions } = await supabase
+        .from('positions')
+        .select('*, candidates(*)')
+        .eq('election_id', id)
+        .order('display_order', { ascending: true });
+
+      // Fetch voter stats
+      const { count: totalVoters } = await supabase
+        .from('voters')
+        .select('*', { count: 'exact', head: true })
+        .eq('election_id', id);
+
+      const { count: votesCast } = await supabase
+        .from('voters')
+        .select('*', { count: 'exact', head: true })
+        .eq('election_id', id)
+        .eq('has_voted', true);
+
+      setElection({
+        ...electionData,
+        positions: positions || [],
+        voter_stats: { total_voters: totalVoters || 0, votes_cast: votesCast || 0 }
+      });
     } catch (err) {
+      console.error(err);
       toast.error('Failed to load election');
       navigate('/admin/dashboard');
     } finally {
@@ -43,24 +75,35 @@ export default function ElectionDetail() {
     if (!confirm(confirmMsg)) return;
 
     try {
-      await updateElection(id, { status: newStatus });
+      const { error } = await supabase
+        .from('elections')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', id);
+
+      if (error) throw error;
       toast.success(`Election ${newStatus === 'active' ? 'launched' : newStatus}!`);
       loadElection();
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to update status');
+      console.error(err);
+      toast.error(err.message || 'Failed to update status');
     }
   };
 
   const handleAddPosition = async (e) => {
     e.preventDefault();
     try {
-      await addPosition({ election_id: id, title: positionTitle, description: positionDesc });
+      const { error } = await supabase
+        .from('positions')
+        .insert([{ election_id: id, title: positionTitle, description: positionDesc }]);
+
+      if (error) throw error;
       toast.success('Position added!');
       setShowPositionModal(false);
       setPositionTitle('');
       setPositionDesc('');
       loadElection();
     } catch (err) {
+      console.error(err);
       toast.error('Failed to add position');
     }
   };
@@ -68,10 +111,12 @@ export default function ElectionDetail() {
   const handleDeletePosition = async (posId) => {
     if (!confirm('Delete this position and all its candidates?')) return;
     try {
-      await deletePosition(posId);
+      const { error } = await supabase.from('positions').delete().eq('id', posId);
+      if (error) throw error;
       toast.success('Position deleted');
       loadElection();
     } catch (err) {
+      console.error(err);
       toast.error('Failed to delete position');
     }
   };
@@ -79,18 +124,23 @@ export default function ElectionDetail() {
   const handleAddCandidate = async (e) => {
     e.preventDefault();
     try {
-      await addCandidate({
-        position_id: showCandidateModal,
-        election_id: id,
-        name: candidateName,
-        bio: candidateBio
-      });
+      const { error } = await supabase
+        .from('candidates')
+        .insert([{
+          position_id: showCandidateModal,
+          election_id: id,
+          name: candidateName,
+          bio: candidateBio
+        }]);
+
+      if (error) throw error;
       toast.success('Candidate added!');
       setShowCandidateModal(null);
       setCandidateName('');
       setCandidateBio('');
       loadElection();
     } catch (err) {
+      console.error(err);
       toast.error('Failed to add candidate');
     }
   };
@@ -98,10 +148,12 @@ export default function ElectionDetail() {
   const handleDeleteCandidate = async (candId) => {
     if (!confirm('Delete this candidate?')) return;
     try {
-      await deleteCandidate(candId);
+      const { error } = await supabase.from('candidates').delete().eq('id', candId);
+      if (error) throw error;
       toast.success('Candidate deleted');
       loadElection();
     } catch (err) {
+      console.error(err);
       toast.error('Failed to delete candidate');
     }
   };
@@ -109,11 +161,13 @@ export default function ElectionDetail() {
   const handleDeleteElection = async () => {
     if (!confirm('Are you sure you want to delete this election? This cannot be undone.')) return;
     try {
-      await deleteElection(id);
+      const { error } = await supabase.from('elections').delete().eq('id', id);
+      if (error) throw error;
       toast.success('Election deleted');
       navigate('/admin/dashboard');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to delete election');
+      console.error(err);
+      toast.error(err.message || 'Failed to delete election');
     }
   };
 
