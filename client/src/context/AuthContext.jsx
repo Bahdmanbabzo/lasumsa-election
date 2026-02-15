@@ -9,20 +9,34 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Get initial session
+    let mounted = true;
+
+    // 1. Get initial session safely
     const getSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        await fetchProfile(session.user.id, session.user);
-      } else {
-        setLoading(false);
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        
+        if (session && mounted) {
+          await fetchProfile(session.user.id, session.user);
+        } else if (mounted) {
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err);
+        if (mounted) setLoading(false);
       }
     };
     getSession();
 
     // 2. Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
+      
       if (session) {
+        // Only fetch profile if user changed or barely loaded
+        // This prevents double fetching if getSession already did it
+        // However, onAuthStateChange is more reliable for updates
         await fetchProfile(session.user.id, session.user);
       } else {
         setUser(null);
@@ -30,7 +44,10 @@ export function AuthProvider({ children }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const fetchProfile = async (userId, authUser) => {
